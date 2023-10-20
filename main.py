@@ -19,6 +19,7 @@ _CHAR_HARDWARE_REV_STR = bluetooth.UUID(0x2A27)
 # Constants for the Environmental Sensing Service
 _SVC_ENVIRONM_SENSING = bluetooth.UUID(0x181A)
 _CHAR_TEMP_MEASUREMENT = bluetooth.UUID(0x2A1C)
+_DESC_ES_TRIGGER_SETTING = bluetooth.UUID(0x290D)
 _TEMP_MEASUREMENT_INTERVAL_MS = const(15_000)
 
 svc_dev_info = aioble.Service(_SVC_DEVICE_INFO)
@@ -29,11 +30,13 @@ aioble.Characteristic(svc_dev_info, _CHAR_FIRMWARE_REV_STR, read=True, initial='
 aioble.Characteristic(svc_dev_info, _CHAR_HARDWARE_REV_STR, read=True, initial='0.0.1')
 
 svc_env_sensing = aioble.Service(_SVC_ENVIRONM_SENSING)
-temperature_char = aioble.Characteristic(svc_env_sensing, _CHAR_TEMP_MEASUREMENT, read=True)
+temperature_char = aioble.Characteristic(svc_env_sensing, _CHAR_TEMP_MEASUREMENT, read=True, notify=True)
+aioble.Descriptor(temperature_char, _DESC_ES_TRIGGER_SETTING, write=True, initial=struct.pack("<B", 0))
 
 aioble.register_services(svc_dev_info, svc_env_sensing)
 
 connected = False
+connection = None
 led = Pin('LED', Pin.OUT)
 adc = ADC(4)
 
@@ -43,7 +46,7 @@ def _encode_ieee11073(value, precision=2):
 
 async def task_peripheral():
   """ Task to handle advertising and connections """
-  global connected
+  global connected, connection
   while True:
     connected = False
     async with await aioble.advertise(
@@ -55,6 +58,7 @@ async def task_peripheral():
       connected = True
       print("Connected from ", connection.device)
       await connection.disconnected(timeout_ms=None)
+      connection = None
       print("Disconnect")
 
 async def task_flash_led():
@@ -73,7 +77,10 @@ async def task_sensor():
   while True:
     temperature =  27.0 - ((adc.read_u16() * 3.3 / 65535) - 0.706) / 0.001721
     print("T: {}°C".format(temperature))
-    temperature_char.write(struct.pack("<B4s", 0, _encode_ieee11073(temperature)))
+    payload = struct.pack("<B4s", 0, _encode_ieee11073(temperature))
+    temperature_char.write(payload)
+    if connection is not None:
+        temperature_char.notify(connection, payload)
     await asyncio.sleep_ms(_TEMP_MEASUREMENT_INTERVAL_MS)
 
 async def main():
